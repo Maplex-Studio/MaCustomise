@@ -1,4 +1,4 @@
-# @maplex-lib/customise
+# Maplex Customise
 
 A powerful Express middleware for managing user themes with advanced color systems, caching, and CSS generation. Built with TypeScript and designed to integrate seamlessly with the Maplex ecosystem.
 
