@@ -1,0 +1,27 @@
+{
+  "name": "@maplex-lib/customise",
+  "version": "2.0.1",
+  "module": "./src/index.ts",
+  "files": [
+    "dist"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "pub": "tsc && npm publish --access public"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/culori": "^4.0.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@maplex-lib/auth": "^2.0.1",
+    "@maplex-lib/database": "^2.1.4",
+    "culori": "^4.0.2",
+    "express": "^5.1.0"
+  }
+}
