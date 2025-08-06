@@ -1,6 +1,6 @@
 import express, { Router, Request, Response, NextFunction } from 'express';
 import { Database, DataTypes } from '@maplex-lib/database';
-import createAuth, { AuthRequest } from '@maplex-lib/auth';
+import { AuthMiddleware, AuthRequest } from '@maplex-lib/auth';
 import { oklch, formatCss, Color } from 'culori';
 
 export interface ThemeColors {
@@ -50,6 +50,7 @@ export interface Theme {
 
 export interface ThemeMiddlewareOptions {
   database: Database;
+  authMiddleware: AuthMiddleware; // Now required instead of creating our own
   tableName?: string;
   routePrefix?: string;
   enableCaching?: boolean;
@@ -61,10 +62,10 @@ interface CacheEntry {
   timestamp: number;
 }
 
-// Fix the interface extension issue by properly extending AuthRequest
+// Use the AuthRequest from the auth library directly
 export interface ThemeRequest extends AuthRequest {
   user?: {
-    id: number; // Changed from string to number to match UserPayload
+    id: number;
     username: string;
     role: "user" | "admin";
     isRoot: boolean;
@@ -104,15 +105,21 @@ const DEFAULT_FONTS: ThemeFonts = {
 };
 
 class ThemeMiddleware {
-  private options: Required<ThemeMiddlewareOptions>;
+  private options: Required<Omit<ThemeMiddlewareOptions, 'authMiddleware'>> & { authMiddleware: AuthMiddleware };
   private db: Database;
+  private authMiddleware: AuthMiddleware;
   private cache: Map<string, CacheEntry>;
   private router: Router;
   private initialized: boolean;
 
   constructor(options: ThemeMiddlewareOptions) {
+    if (!options.authMiddleware) {
+      throw new Error('AuthMiddleware instance is required');
+    }
+
     this.options = {
       database: options.database,
+      authMiddleware: options.authMiddleware,
       tableName: options.tableName || 'user_themes',
       routePrefix: options.routePrefix || '/api/v1/theme',
       enableCaching: options.enableCaching !== false,
@@ -120,6 +127,7 @@ class ThemeMiddleware {
     };
     
     this.db = options.database;
+    this.authMiddleware = options.authMiddleware;
     this.cache = new Map<string, CacheEntry>();
     this.router = Router();
     this.initialized = false;
@@ -159,7 +167,6 @@ class ThemeMiddleware {
         }
       };
 
-      // Fix: Remove the second parameter from createTable
       this.db.createTable(this.options.tableName, themeSchema);
       await this.db.syncTables();
       this.setupRoutes();
@@ -235,12 +242,14 @@ class ThemeMiddleware {
 
   private setupRoutes(): void {
     this.router.use(express.json());
-    this.router.use(createAuth.protect({ database: this.db }));
+    
+    // Use the provided auth middleware instance for all routes
+    this.router.use(this.authMiddleware.protect());
 
     // GET / - Get user's theme
     this.router.get('/', async (req: ThemeRequest, res: Response) => {
       try {
-        const userId = req.user?.id?.toString(); // Convert to string for consistency
+        const userId = req.user?.id?.toString();
         if (!userId) {
           return res.status(401).json({ error: 'Authentication required' });
         }
@@ -253,13 +262,11 @@ class ThemeMiddleware {
             where: { userId } 
           });
 
-          // Fix: Properly handle the database result type
           if (!dbResult) {
             const defaultTheme = this.createDefaultTheme(userId);
             const insertResult = await this.db.insert(this.options.tableName, defaultTheme);
             theme = { ...defaultTheme, ...insertResult } as Theme;
           } else {
-            // Cast the database result to Theme type
             theme = dbResult as unknown as Theme;
           }
           
@@ -276,7 +283,7 @@ class ThemeMiddleware {
     // POST / - Update user's theme
     this.router.post('/', async (req: ThemeRequest, res: Response) => {
       try {
-        const userId = req.user?.id?.toString(); // Convert to string for consistency
+        const userId = req.user?.id?.toString();
         if (!userId) {
           return res.status(401).json({ error: 'Authentication required' });
         }
@@ -331,7 +338,7 @@ class ThemeMiddleware {
     // GET /css - Generate CSS with OKLCH colors
     this.router.get('/css', async (req: ThemeRequest, res: Response) => {
       try {
-        const userId = req.user?.id?.toString(); // Convert to string for consistency
+        const userId = req.user?.id?.toString();
         if (!userId) {
           return res.status(401).json({ error: 'Authentication required' });
         }
@@ -393,7 +400,7 @@ class ThemeMiddleware {
     // DELETE / - Reset theme to defaults
     this.router.delete('/', async (req: ThemeRequest, res: Response) => {
       try {
-        const userId = req.user?.id?.toString(); // Convert to string for consistency
+        const userId = req.user?.id?.toString();
         if (!userId) {
           return res.status(401).json({ error: 'Authentication required' });
         }
@@ -423,7 +430,6 @@ class ThemeMiddleware {
       if (req.path.startsWith(this.options.routePrefix)) {
         const subPath = req.path.substring(this.options.routePrefix.length);
         req.url = subPath || '/';
-        // Fix: Explicitly return void to satisfy the return type
         this.router(req, res, next);
         return;
       }
@@ -433,6 +439,7 @@ class ThemeMiddleware {
   }
 }
 
+// Updated factory function to require authMiddleware
 function createThemeMiddleware(options: ThemeMiddlewareOptions) {
   const themeMiddleware = new ThemeMiddleware(options);
   return themeMiddleware.middleware();
