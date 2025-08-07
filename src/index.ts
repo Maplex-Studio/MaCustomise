@@ -50,7 +50,7 @@ export interface Theme {
 
 export interface ThemeMiddlewareOptions {
   database: Database;
-  authMiddleware: AuthMiddleware; // Now required instead of creating our own
+  authMiddleware: AuthMiddleware;
   tableName?: string;
   routePrefix?: string;
   enableCaching?: boolean;
@@ -62,7 +62,6 @@ interface CacheEntry {
   timestamp: number;
 }
 
-// Use the AuthRequest from the auth library directly
 export interface ThemeRequest extends AuthRequest {
   user?: {
     id: number;
@@ -74,17 +73,17 @@ export interface ThemeRequest extends AuthRequest {
 
 const DEFAULT_THEME_COLORS: ThemeColors = {
   background: '#ffffff',
-  foreground: '#0a0a0a',
-  primary: '#0a0a0a',
+  foreground: '#1E1E1E',
+  primary: '#1E1E1E',
   'primary-foreground': '#ffffff',
   secondary: '#f5f5f5',
-  'secondary-foreground': '#0a0a0a',
+  'secondary-foreground': '#1E1E1E',
   accent: '#f5f5f5',
-  'accent-foreground': '#0a0a0a',
+  'accent-foreground': '#1E1E1E',
   muted: '#f5f5f5',
   'muted-foreground': '#737373',
   card: '#ffffff',
-  'card-foreground': '#0a0a0a',
+  'card-foreground': '#1E1E1E',
   border: '#e5e5e5',
   input: '#e5e5e5',
   ring: '#a3a3a3',
@@ -201,7 +200,6 @@ class ThemeMiddleware {
   private clearCache(userId: string): void {
     if (!this.options.enableCaching) return;
     this.cache.delete(this.getCacheKey(userId));
-    // Also clear CSS cache
     this.cache.delete(this.getCacheKey(`css_${userId}`));
   }
 
@@ -213,7 +211,6 @@ class ThemeMiddleware {
       }
       return color;
     } catch (e) {
-      // fallback to original value if conversion fails
       return color;
     }
   }
@@ -240,10 +237,34 @@ class ThemeMiddleware {
     }
   }
 
+  private generateShadowVariables(shadows: ThemeShadows): string {
+    if (!shadows.enabled) {
+      return `
+        --shadow-2xs: none;
+        --shadow-xs: none;
+        --shadow-sm: none;
+        --shadow: none;
+        --shadow-md: none;
+        --shadow-lg: none;
+        --shadow-xl: none;
+        --shadow-2xl: none;
+      `;
+    }
+
+    return `
+      --shadow-2xs: 0 1px 2px 0px hsl(0 0% 0% / ${shadows.opacity * 0.6});
+      --shadow-xs: 0 1px 2px 0px hsl(0 0% 0% / ${shadows.opacity * 0.6});
+      --shadow-sm: 0 1px 2px 0px hsl(0 0% 0% / ${shadows.opacity}), 0 1px 2px -1px hsl(0 0% 0% / ${shadows.opacity});
+      --shadow: 0 1px 2px 0px hsl(0 0% 0% / ${shadows.opacity}), 0 1px 2px -1px hsl(0 0% 0% / ${shadows.opacity});
+      --shadow-md: 0 1px 2px 0px hsl(0 0% 0% / ${shadows.opacity}), 0 2px 4px -1px hsl(0 0% 0% / ${shadows.opacity});
+      --shadow-lg: 0 1px 2px 0px hsl(0 0% 0% / ${shadows.opacity}), 0 4px 6px -1px hsl(0 0% 0% / ${shadows.opacity});
+      --shadow-xl: 0 1px 2px 0px hsl(0 0% 0% / ${shadows.opacity}), 0 8px 10px -1px hsl(0 0% 0% / ${shadows.opacity});
+      --shadow-2xl: 0 1px 2px 0px hsl(0 0% 0% / ${shadows.opacity * 2.6});
+    `;
+  }
+
   private setupRoutes(): void {
     this.router.use(express.json());
-    
-    // Use the provided auth middleware instance for all routes
     this.router.use(this.authMiddleware.protect());
 
     // GET / - Get user's theme
@@ -312,7 +333,6 @@ class ThemeMiddleware {
           fonts: themeData.fonts || DEFAULT_FONTS
         };
 
-        // Check if theme exists
         const existingTheme = await this.db.findOne(this.options.tableName, { 
           where: { userId } 
         });
@@ -359,16 +379,16 @@ class ThemeMiddleware {
 
           css = ':root {\n';
           
-          // Add radius first
+          // Radius
           css += `  --radius: ${theme.radius}rem;\n`;
           
-          // Add color variables in OKLCH format
+          // Color variables
           Object.entries(theme.colors).forEach(([key, value]) => {
             const oklchColor = this.convertToOklch(value);
             css += `  --${key}: ${oklchColor};\n`;
           });
 
-          // Add additional color variables (these would need to be computed or stored)
+          // Additional color variables
           css += `  --popover: var(--card);\n`;
           css += `  --popover-foreground: var(--card-foreground);\n`;
           css += `  --chart-1: oklch(0.8091 0.1431 152.6021);\n`;
@@ -385,12 +405,12 @@ class ThemeMiddleware {
           css += `  --sidebar-border: var(--border);\n`;
           css += `  --sidebar-ring: var(--ring);\n`;
           
-          // Add font variables with full fallback stacks
+          // Font variables
           css += `  --font-sans: ${theme.fonts.sans}, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';\n`;
           css += `  --font-serif: ${theme.fonts.serif}, ui-serif, serif;\n`;
           css += `  --font-mono: ${theme.fonts.mono}, ui-monospace, monospace;\n`;
           
-          // Add shadow variables
+          // Shadow variables
           css += `  --shadow-color: #000000;\n`;
           css += `  --shadow-opacity: ${theme.shadows.opacity};\n`;
           css += `  --shadow-blur: ${theme.shadows.blur}px;\n`;
@@ -398,19 +418,12 @@ class ThemeMiddleware {
           css += `  --shadow-offset-x: 0;\n`;
           css += `  --shadow-offset-y: 1px;\n`;
           
-          // Add additional variables
+          // Generated shadow utilities
+          css += this.generateShadowVariables(theme.shadows);
+          
+          // Additional variables
           css += `  --letter-spacing: 0em;\n`;
           css += `  --spacing: 0.25rem;\n`;
-          
-          // Add shadow utilities
-          css += `  --shadow-2xs: 0 1px 2px 0px hsl(0 0% 0% / 0.03);\n`;
-          css += `  --shadow-xs: 0 1px 2px 0px hsl(0 0% 0% / 0.03);\n`;
-          css += `  --shadow-sm: 0 1px 2px 0px hsl(0 0% 0% / 0.05), 0 1px 2px -1px hsl(0 0% 0% / 0.05);\n`;
-          css += `  --shadow: 0 1px 2px 0px hsl(0 0% 0% / 0.05), 0 1px 2px -1px hsl(0 0% 0% / 0.05);\n`;
-          css += `  --shadow-md: 0 1px 2px 0px hsl(0 0% 0% / 0.05), 0 2px 4px -1px hsl(0 0% 0% / 0.05);\n`;
-          css += `  --shadow-lg: 0 1px 2px 0px hsl(0 0% 0% / 0.05), 0 4px 6px -1px hsl(0 0% 0% / 0.05);\n`;
-          css += `  --shadow-xl: 0 1px 2px 0px hsl(0 0% 0% / 0.05), 0 8px 10px -1px hsl(0 0% 0% / 0.05);\n`;
-          css += `  --shadow-2xl: 0 1px 2px 0px hsl(0 0% 0% / 0.13);\n`;
           css += `  --tracking-normal: 0em;\n`;
           
           css += '}\n';
@@ -419,7 +432,7 @@ class ThemeMiddleware {
         }
 
         res.setHeader('Content-Type', 'text/css');
-        res.setHeader('Cache-Control', 'public, max-age=300'); // 5 minutes cache
+        res.setHeader('Cache-Control', 'public, max-age=300');
         res.send(css);
       } catch (error) {
         console.error('Failed to generate CSS:', error);
@@ -469,7 +482,6 @@ class ThemeMiddleware {
   }
 }
 
-// Updated factory function to require authMiddleware
 function createThemeMiddleware(options: ThemeMiddlewareOptions) {
   const themeMiddleware = new ThemeMiddleware(options);
   return themeMiddleware.middleware();
