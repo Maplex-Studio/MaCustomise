@@ -359,31 +359,61 @@ class ThemeMiddleware {
 
           css = ':root {\n';
           
-          // Add color variables
+          // Add radius first
+          css += `  --radius: ${theme.radius}rem;\n`;
+          
+          // Add color variables in OKLCH format
           Object.entries(theme.colors).forEach(([key, value]) => {
             const oklchColor = this.convertToOklch(value);
             css += `  --${key}: ${oklchColor};\n`;
           });
+
+          // Add additional color variables (these would need to be computed or stored)
+          css += `  --popover: var(--card);\n`;
+          css += `  --popover-foreground: var(--card-foreground);\n`;
+          css += `  --chart-1: oklch(0.8091 0.1431 152.6021);\n`;
+          css += `  --chart-2: oklch(0.8063 0.1871 155.6935);\n`;
+          css += `  --chart-3: oklch(0.7549 0.1455 165.4268);\n`;
+          css += `  --chart-4: oklch(0.7897 0.1175 177.7279);\n`;
+          css += `  --chart-5: oklch(0.5917 0.1357 242.4819);\n`;
+          css += `  --sidebar: var(--background);\n`;
+          css += `  --sidebar-foreground: var(--foreground);\n`;
+          css += `  --sidebar-primary: var(--primary);\n`;
+          css += `  --sidebar-primary-foreground: var(--primary-foreground);\n`;
+          css += `  --sidebar-accent: var(--accent);\n`;
+          css += `  --sidebar-accent-foreground: var(--accent-foreground);\n`;
+          css += `  --sidebar-border: var(--border);\n`;
+          css += `  --sidebar-ring: var(--ring);\n`;
           
-          // Add other CSS variables
-          css += `  --radius: ${theme.radius}rem;\n`;
-          css += `  --shadow-enabled: ${theme.shadows.enabled ? '1' : '0'};\n`;
+          // Add font variables with full fallback stacks
+          css += `  --font-sans: ${theme.fonts.sans}, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';\n`;
+          css += `  --font-serif: ${theme.fonts.serif}, ui-serif, serif;\n`;
+          css += `  --font-mono: ${theme.fonts.mono}, ui-monospace, monospace;\n`;
+          
+          // Add shadow variables
+          css += `  --shadow-color: #000000;\n`;
           css += `  --shadow-opacity: ${theme.shadows.opacity};\n`;
           css += `  --shadow-blur: ${theme.shadows.blur}px;\n`;
-          css += `  --font-sans: '${theme.fonts.sans}', ui-sans-serif, system-ui, sans-serif;\n`;
-          css += `  --font-serif: '${theme.fonts.serif}', ui-serif, serif;\n`;
-          css += `  --font-mono: '${theme.fonts.mono}', ui-monospace, monospace;\n`;
+          css += `  --shadow-spread: 0px;\n`;
+          css += `  --shadow-offset-x: 0;\n`;
+          css += `  --shadow-offset-y: 1px;\n`;
+          
+          // Add additional variables
+          css += `  --letter-spacing: 0em;\n`;
+          css += `  --spacing: 0.25rem;\n`;
+          
+          // Add shadow utilities
+          css += `  --shadow-2xs: 0 1px 2px 0px hsl(0 0% 0% / 0.03);\n`;
+          css += `  --shadow-xs: 0 1px 2px 0px hsl(0 0% 0% / 0.03);\n`;
+          css += `  --shadow-sm: 0 1px 2px 0px hsl(0 0% 0% / 0.05), 0 1px 2px -1px hsl(0 0% 0% / 0.05);\n`;
+          css += `  --shadow: 0 1px 2px 0px hsl(0 0% 0% / 0.05), 0 1px 2px -1px hsl(0 0% 0% / 0.05);\n`;
+          css += `  --shadow-md: 0 1px 2px 0px hsl(0 0% 0% / 0.05), 0 2px 4px -1px hsl(0 0% 0% / 0.05);\n`;
+          css += `  --shadow-lg: 0 1px 2px 0px hsl(0 0% 0% / 0.05), 0 4px 6px -1px hsl(0 0% 0% / 0.05);\n`;
+          css += `  --shadow-xl: 0 1px 2px 0px hsl(0 0% 0% / 0.05), 0 8px 10px -1px hsl(0 0% 0% / 0.05);\n`;
+          css += `  --shadow-2xl: 0 1px 2px 0px hsl(0 0% 0% / 0.13);\n`;
+          css += `  --tracking-normal: 0em;\n`;
+          
           css += '}\n';
-
-          // Add shadow utility classes if shadows are enabled
-          if (theme.shadows.enabled) {
-            css += `
-.shadow-sm { box-shadow: 0 1px 2px 0 rgba(0, 0, 0, var(--shadow-opacity)); }
-.shadow { box-shadow: 0 1px 3px 0 rgba(0, 0, 0, var(--shadow-opacity)), 0 1px 2px 0 rgba(0, 0, 0, calc(var(--shadow-opacity) * 0.6)); }
-.shadow-md { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, var(--shadow-opacity)), 0 2px 4px -1px rgba(0, 0, 0, calc(var(--shadow-opacity) * 0.6)); }
-.shadow-lg { box-shadow: 0 10px 15px -3px rgba(0, 0, 0, var(--shadow-opacity)), 0 4px 6px -2px rgba(0, 0, 0, calc(var(--shadow-opacity) * 0.5)); }
-`;
-          }
 
           this.setCache(cacheKey, css);
         }
