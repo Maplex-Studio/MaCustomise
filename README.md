@@ -1,15 +1,18 @@
 # Maplex Customise
 
-A powerful Express middleware for managing user themes with advanced color systems, caching, and CSS generation. Built with TypeScript and designed to integrate seamlessly with the Maplex ecosystem.
+A powerful Express middleware for managing a global theme with advanced color systems, caching, and CSS generation. Built with TypeScript and designed to integrate seamlessly with the Maplex ecosystem.
 
 ## Features
 
+- 🌍 **Global Theme** - Single theme configuration for all users
+- 🔐 **Admin Controls** - Only admin users can modify the theme
+- 🖼️ **Logo Support** - Upload and manage a logo for the application
 - 🎨 **Advanced Color Management** - Full support for OKLCH color space conversion
 - 🚀 **High Performance** - Built-in caching with configurable TTL
 - 🎯 **Type Safe** - Written in TypeScript with comprehensive type definitions
-- 🔧 **Flexible Configuration** - Customizable shadows, fonts, and border radius
+- 🔧 **Flexible Configuration** - Customizable shadows, fonts, border radius, and name
 - 📦 **Database Agnostic** - Works with any @maplex-lib/database implementation
-- 🔐 **Secure** - Integrates with @maplex-lib/auth for user authentication
+- 🔐 **Secure** - Integrates with @maplex-lib/auth for authentication
 - 📱 **CSS Generation** - Automatic CSS variable generation with utility classes
 
 ## Installation
@@ -31,10 +34,12 @@ const database = new Database(/* your config */);
 // Apply theme middleware
 app.use(createThemeMiddleware({
   database,
-  tableName: 'user_themes', // optional
+  authMiddleware, // Required: Auth middleware instance
+  tableName: 'global_theme', // optional
   routePrefix: '/api/v1/theme', // optional
   enableCaching: true, // optional
-  cacheTTL: 300000 // optional (5 minutes)
+  cacheTTL: 300000, // optional (5 minutes)
+  publicDir: './public' // optional
 }));
 
 app.listen(3000);
@@ -47,10 +52,12 @@ app.listen(3000);
 ```typescript
 interface ThemeMiddlewareOptions {
   database: Database;           // Required: Database instance
-  tableName?: string;          // Optional: Table name (default: 'user_themes')
+  authMiddleware: AuthMiddleware; // Required: Auth middleware
+  tableName?: string;          // Optional: Table name (default: 'global_theme')
   routePrefix?: string;        // Optional: API route prefix (default: '/api/v1/theme')
   enableCaching?: boolean;     // Optional: Enable caching (default: true)
   cacheTTL?: number;          // Optional: Cache TTL in ms (default: 300000)
+  publicDir?: string;         // Optional: Public directory for logo storage (default: './public')
 }
 ```
 
@@ -59,62 +66,37 @@ interface ThemeMiddlewareOptions {
 ```typescript
 interface Theme {
   id?: number;
-  userId: string;
-  name: string;
-  colors: ThemeColors;
-  radius: number;
-  shadows: ThemeShadows;
-  fonts: ThemeFonts;
+  name: string;               // Theme display name
+  colors: ThemeColors;        // Color palette
+  radius: number;             // Border radius (0-1)
+  shadows: ThemeShadows;      // Shadow configuration
+  fonts: ThemeFonts;          // Font configuration
+  logo?: string;              // Path to logo image
   createdAt?: Date;
   updatedAt?: Date;
-}
-```
-
-### Color Palette
-
-```typescript
-interface ThemeColors {
-  background: string;
-  foreground: string;
-  primary: string;
-  'primary-foreground': string;
-  secondary: string;
-  'secondary-foreground': string;
-  accent: string;
-  'accent-foreground': string;
-  muted: string;
-  'muted-foreground': string;
-  card: string;
-  'card-foreground': string;
-  border: string;
-  input: string;
-  ring: string;
-  destructive: string;
-  'destructive-foreground': string;
-  [key: string]: string;
 }
 ```
 
 ## API Endpoints
 
 ### GET `/api/v1/theme`
-Retrieve the current user's theme. Creates a default theme if none exists.
+Retrieve the global theme. Available to all users.
 
 **Response:**
 ```json
 {
   "id": 1,
-  "userId": "123",
-  "name": "My Theme",
+  "name": "Corporate Theme",
   "colors": { "background": "#ffffff", ... },
   "radius": 0.5,
   "shadows": { "enabled": true, "opacity": 0.05, "blur": 2 },
-  "fonts": { "sans": "Inter", "serif": "Source Serif 4", "mono": "JetBrains Mono" }
+  "fonts": { "sans": "Inter", "serif": "Source Serif 4", "mono": "JetBrains Mono" },
+  "logo": "/logo.png"
 }
 ```
 
 ### POST `/api/v1/theme`
-Update or create the current user's theme.
+Update the global theme. **Admin only.**
 
 **Request Body:**
 ```json
@@ -122,9 +104,7 @@ Update or create the current user's theme.
   "name": "Dark Theme",
   "colors": {
     "background": "#0a0a0a",
-    "foreground": "#ffffff",
-    "primary": "#ffffff",
-    "primary-foreground": "#0a0a0a"
+    "foreground": "#ffffff"
   },
   "radius": 0.8,
   "shadows": {
@@ -140,8 +120,25 @@ Update or create the current user's theme.
 }
 ```
 
+### POST `/api/v1/theme/logo`
+Upload a logo image. **Admin only.** Accepts multipart form with 'logo' field.
+
+**Request:**
+```http
+POST /api/v1/theme/logo
+Content-Type: multipart/form-data
+```
+
+**Response:**
+```json
+{
+  "message": "Logo updated successfully",
+  "logoPath": "/logo.png"
+}
+```
+
 ### GET `/api/v1/theme/css`
-Generate CSS with OKLCH color variables and utility classes.
+Generate CSS with OKLCH color variables and utility classes. Available to all users.
 
 **Response:**
 ```css
@@ -152,23 +149,51 @@ Generate CSS with OKLCH color variables and utility classes.
   --radius: 0.5rem;
   --shadow-opacity: 0.05;
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --logo-url: url('/logo.png');
 }
 
+/* Theme: Corporate Theme */
+
 .shadow-sm { box-shadow: 0 1px 2px 0 rgba(0, 0, 0, var(--shadow-opacity)); }
-.shadow { box-shadow: 0 1px 3px 0 rgba(0, 0, 0, var(--shadow-opacity)), 0 1px 2px 0 rgba(0, 0, 0, calc(var(--shadow-opacity) * 0.6)); }
 ```
 
 ### DELETE `/api/v1/theme`
-Reset the user's theme to default values.
+Reset the theme to default values (including removing logo). **Admin only.**
+
+**Response:**
+```json
+{
+  "message": "Theme reset to defaults",
+  "theme": {
+    "name": "My Theme",
+    "colors": { ...default colors... }
+  }
+}
+```
+
+## Logo Management
+
+- Logo images are automatically saved as `logo.png` in the public directory
+- Only PNG format is supported
+- Maximum file size: 5MB
+- Previous logo is automatically deleted when uploading a new one
+- Logo is deleted when theme is reset to defaults
+
+## Security
+
+- All modification endpoints require admin privileges
+- File uploads are strictly validated
+- Logo files are saved with predictable names to prevent directory traversal
 
 ## Advanced Usage
 
-### Custom Route Prefix
+### Custom Public Directory
 
 ```typescript
 app.use(createThemeMiddleware({
   database,
-  routePrefix: '/api/themes'
+  authMiddleware,
+  publicDir: path.join(__dirname, 'static')
 }));
 ```
 
@@ -177,6 +202,7 @@ app.use(createThemeMiddleware({
 ```typescript
 app.use(createThemeMiddleware({
   database,
+  authMiddleware,
   enableCaching: false
 }));
 ```
@@ -186,63 +212,10 @@ app.use(createThemeMiddleware({
 ```typescript
 app.use(createThemeMiddleware({
   database,
+  authMiddleware,
   cacheTTL: 600000 // 10 minutes
 }));
 ```
-
-### Using with Custom Table Name
-
-```typescript
-app.use(createThemeMiddleware({
-  database,
-  tableName: 'custom_themes'
-}));
-```
-
-## Color System
-
-The middleware uses the OKLCH color space for better color perception and manipulation. All colors are automatically converted from any CSS color format (hex, rgb, hsl, etc.) to OKLCH when generating CSS.
-
-**Benefits of OKLCH:**
-- Perceptually uniform color space
-- Better for programmatic color manipulation
-- More predictable lightness and saturation changes
-- Future-proof with modern CSS specifications
-
-## Font System
-
-Three font categories are supported:
-- **Sans-serif** (`--font-sans`): For body text and UI elements
-- **Serif** (`--font-serif`): For headings and decorative text
-- **Monospace** (`--font-mono`): For code and technical content
-
-## Shadow System
-
-Configurable shadow system with:
-- **Enabled/Disabled**: Toggle shadow generation
-- **Opacity**: Control shadow transparency (0-1)
-- **Blur**: Control shadow blur radius
-
-Generated utility classes:
-- `.shadow-sm` - Small shadow
-- `.shadow` - Default shadow
-- `.shadow-md` - Medium shadow
-- `.shadow-lg` - Large shadow
-
-## Error Handling
-
-The middleware includes comprehensive error handling:
-- Authentication validation
-- Theme data validation
-- Database error handling
-- Graceful fallbacks to default values
-
-## Dependencies
-
-- `@maplex-lib/database` - Database abstraction layer
-- `@maplex-lib/auth` - Authentication middleware
-- `culori` - Color manipulation and conversion
-- `express` - Web framework
 
 ## TypeScript Support
 
@@ -253,6 +226,14 @@ Full TypeScript support with exported interfaces:
 - `ThemeFonts`
 - `ThemeRequest`
 - `ThemeMiddlewareOptions`
+
+## Dependencies
+
+- `@maplex-lib/database` - Database abstraction layer
+- `@maplex-lib/auth` - Authentication middleware
+- `culori` - Color manipulation and conversion
+- `express` - Web framework
+- `multer` - File upload handling
 
 ## License
 

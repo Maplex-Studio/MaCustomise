@@ -2,6 +2,15 @@ import express, { Router, Request, Response, NextFunction } from 'express';
 import { Database, DataTypes } from '@maplex-lib/database';
 import { AuthMiddleware, AuthRequest } from '@maplex-lib/auth';
 import { oklch, formatCss, Color } from 'culori';
+import fs from 'fs';
+import path from 'path';
+import multer from 'multer';
+
+// Configure multer for file uploads
+const upload = multer({ 
+  dest: 'uploads/',
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+});
 
 export interface ThemeColors {
   background: string;
@@ -38,12 +47,12 @@ export interface ThemeFonts {
 
 export interface Theme {
   id?: number;
-  userId: string;
   name: string;
   colors: ThemeColors;
   radius: number;
   shadows: ThemeShadows;
   fonts: ThemeFonts;
+  logo?: string; // Path to logo file
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -55,6 +64,7 @@ export interface ThemeMiddlewareOptions {
   routePrefix?: string;
   enableCaching?: boolean;
   cacheTTL?: number;
+  publicDir?: string; // Directory to store public files like logos
 }
 
 interface CacheEntry {
@@ -119,10 +129,11 @@ class ThemeMiddleware {
     this.options = {
       database: options.database,
       authMiddleware: options.authMiddleware,
-      tableName: options.tableName || 'user_themes',
+      tableName: options.tableName || 'global_theme',
       routePrefix: options.routePrefix || '/api/v1/theme',
       enableCaching: options.enableCaching !== false,
       cacheTTL: options.cacheTTL || 300000,
+      publicDir: options.publicDir || path.join(process.cwd(), 'public')
     };
     
     this.db = options.database;
@@ -130,6 +141,11 @@ class ThemeMiddleware {
     this.cache = new Map<string, CacheEntry>();
     this.router = Router();
     this.initialized = false;
+
+    // Ensure public directory exists
+    if (!fs.existsSync(this.options.publicDir)) {
+      fs.mkdirSync(this.options.publicDir, { recursive: true });
+    }
   }
 
   async initialize(): Promise<void> {
@@ -137,11 +153,6 @@ class ThemeMiddleware {
     
     try {
       const themeSchema = {
-        userId: {
-          type: DataTypes.STRING,
-          allowNull: false,
-          unique: true
-        },
         name: { 
           type: DataTypes.STRING, 
           allowNull: false,
@@ -163,11 +174,22 @@ class ThemeMiddleware {
         fonts: {
           type: DataTypes.JSON,
           defaultValue: DEFAULT_FONTS
+        },
+        logo: {
+          type: DataTypes.STRING,
+          allowNull: true
         }
       };
 
       this.db.createTable(this.options.tableName, themeSchema);
       await this.db.syncTables();
+      
+      // Ensure there's always one theme record
+      const existingTheme = await this.db.findOne(this.options.tableName, {});
+      if (!existingTheme) {
+        await this.db.insert(this.options.tableName, this.createDefaultTheme());
+      }
+
       this.setupRoutes();
       this.initialized = true;
       console.log('✅ Theme database initialized successfully');
@@ -177,8 +199,8 @@ class ThemeMiddleware {
     }
   }
 
-  private getCacheKey(userId: string): string { 
-    return `theme_${userId}`; 
+  private getCacheKey(): string { 
+    return `global_theme`; 
   }
 
   private getFromCache(key: string): any | null {
@@ -197,10 +219,10 @@ class ThemeMiddleware {
     this.cache.set(key, { data, timestamp: Date.now() });
   }
 
-  private clearCache(userId: string): void {
+  private clearCache(): void {
     if (!this.options.enableCaching) return;
-    this.cache.delete(this.getCacheKey(userId));
-    this.cache.delete(this.getCacheKey(`css_${userId}`));
+    this.cache.delete(this.getCacheKey());
+    this.cache.delete(`${this.getCacheKey()}_css`);
   }
 
   private convertToOklch(color: string): string {
@@ -215,14 +237,14 @@ class ThemeMiddleware {
     }
   }
 
-  private createDefaultTheme(userId: string): Omit<Theme, 'id' | 'createdAt' | 'updatedAt'> {
+  private createDefaultTheme(): Omit<Theme, 'id' | 'createdAt' | 'updatedAt'> {
     return {
-      userId,
       name: 'My Theme',
       colors: DEFAULT_THEME_COLORS,
       radius: 0.5,
       shadows: DEFAULT_SHADOWS,
-      fonts: DEFAULT_FONTS
+      fonts: DEFAULT_FONTS,
+      logo: undefined
     };
   }
 
@@ -263,34 +285,32 @@ class ThemeMiddleware {
     `;
   }
 
+  private async handleLogoUpload(file: Express.Multer.File): Promise<string> {
+    const logoPath = path.join(this.options.publicDir, 'logo.png');
+    
+    // Delete old logo if exists
+    if (fs.existsSync(logoPath)) {
+      fs.unlinkSync(logoPath);
+    }
+    
+    // Move new logo to public directory
+    fs.renameSync(file.path, logoPath);
+    
+    return '/logo.png'; // Return public URL path
+  }
+
   private setupRoutes(): void {
     this.router.use(express.json());
-    this.router.use(this.authMiddleware.protect());
-
-    // GET / - Get user's theme
-    this.router.get('/', async (req: ThemeRequest, res: Response) => {
+    
+    // GET / - Get global theme (public)
+    this.router.get('/', async (req: Request, res: Response) => {
       try {
-        const userId = req.user?.id?.toString();
-        if (!userId) {
-          return res.status(401).json({ error: 'Authentication required' });
-        }
-
-        const cacheKey = this.getCacheKey(userId);
+        const cacheKey = this.getCacheKey();
         let theme = this.getFromCache(cacheKey);
 
         if (!theme) {
-          const dbResult = await this.db.findOne(this.options.tableName, { 
-            where: { userId } 
-          });
-
-          if (!dbResult) {
-            const defaultTheme = this.createDefaultTheme(userId);
-            const insertResult = await this.db.insert(this.options.tableName, defaultTheme);
-            theme = { ...defaultTheme, ...insertResult } as Theme;
-          } else {
-            theme = dbResult as unknown as Theme;
-          }
-          
+          const dbResult = await this.db.findOne(this.options.tableName, {});
+          theme = dbResult as unknown as Theme;
           this.setCache(cacheKey, theme);
         }
 
@@ -301,76 +321,93 @@ class ThemeMiddleware {
       }
     });
 
-    // POST / - Update user's theme
-    this.router.post('/', async (req: ThemeRequest, res: Response) => {
-      try {
-        const userId = req.user?.id?.toString();
-        if (!userId) {
-          return res.status(401).json({ error: 'Authentication required' });
-        }
-
-        const themeData: Partial<Theme> = req.body;
-        
-        if (!themeData.colors) {
-          return res.status(400).json({ error: 'Theme colors are required' });
-        }
-
+    // POST / - Update global theme (admin only)
+    this.router.post('/', 
+      this.authMiddleware.protect(),
+      async (req: ThemeRequest, res: Response) => {
         try {
-          this.validateThemeData(themeData);
-        } catch (validationError) {
-          return res.status(400).json({ 
-            error: 'Invalid theme data', 
-            details: (validationError as Error).message 
-          });
+          // Check if user is admin
+          if (req.user?.role !== 'admin' && !req.user?.isRoot) {
+            return res.status(403).json({ error: 'Admin privileges required' });
+          }
+
+          const themeData: Partial<Theme> = req.body;
+          
+          if (themeData.colors) {
+            try {
+              this.validateThemeData(themeData);
+            } catch (validationError) {
+              return res.status(400).json({ 
+                error: 'Invalid theme data', 
+                details: (validationError as Error).message 
+              });
+            }
+          }
+
+          const updateData: Partial<Theme> = {
+            name: themeData.name,
+            colors: themeData.colors,
+            radius: themeData.radius,
+            shadows: themeData.shadows,
+            fonts: themeData.fonts
+          };
+
+          // Remove undefined values
+          Object.keys(updateData).forEach(key => 
+            updateData[key as keyof Theme] === undefined && delete updateData[key as keyof Theme]
+          );
+
+          await this.db.update(this.options.tableName, updateData, {});
+          const updatedTheme = await this.db.findOne(this.options.tableName, {}) as unknown as Theme;
+
+          this.clearCache();
+          res.json(updatedTheme);
+        } catch (error) {
+          console.error('Failed to save theme:', error);
+          res.status(500).json({ error: 'Failed to save theme' });
         }
-
-        const updateData: Omit<Theme, 'id' | 'createdAt' | 'updatedAt'> = {
-          userId,
-          name: themeData.name || 'My Theme',
-          colors: themeData.colors,
-          radius: themeData.radius || 0.5,
-          shadows: themeData.shadows || DEFAULT_SHADOWS,
-          fonts: themeData.fonts || DEFAULT_FONTS
-        };
-
-        const existingTheme = await this.db.findOne(this.options.tableName, { 
-          where: { userId } 
-        });
-
-        let theme: Theme;
-        if (existingTheme) {
-          await this.db.update(this.options.tableName, updateData, { userId });
-          const updatedResult = await this.db.findOne(this.options.tableName, { where: { userId } });
-          theme = updatedResult as unknown as Theme;
-        } else {
-          const insertResult = await this.db.insert(this.options.tableName, updateData);
-          theme = { ...updateData, ...insertResult } as Theme;
-        }
-
-        this.clearCache(userId);
-        res.json(theme);
-      } catch (error) {
-        console.error('Failed to save theme:', error);
-        res.status(500).json({ error: 'Failed to save theme' });
       }
-    });
+    );
 
-    // GET /css - Generate CSS with OKLCH colors
-    this.router.get('/css', async (req: ThemeRequest, res: Response) => {
-      try {
-        const userId = req.user?.id?.toString();
-        if (!userId) {
-          return res.status(401).json({ error: 'Authentication required' });
+    // POST /logo - Update logo (admin only)
+    this.router.post('/logo', 
+      this.authMiddleware.protect(),
+      upload.single('logo'),
+      async (req: ThemeRequest, res: Response) => {
+        try {
+          // Check if user is admin
+          if (req.user?.role !== 'admin' && !req.user?.isRoot) {
+            return res.status(403).json({ error: 'Admin privileges required' });
+          }
+
+          if (!req.file) {
+            return res.status(400).json({ error: 'No logo file provided' });
+          }
+
+          // Handle the logo upload
+          const logoPath = await this.handleLogoUpload(req.file);
+          
+          // Update theme with logo path
+          await this.db.update(this.options.tableName, { logo: logoPath }, {});
+          const updatedTheme = await this.db.findOne(this.options.tableName, {}) as unknown as Theme;
+
+          this.clearCache();
+          res.json(updatedTheme);
+        } catch (error) {
+          console.error('Failed to upload logo:', error);
+          res.status(500).json({ error: 'Failed to upload logo' });
         }
+      }
+    );
 
-        const cacheKey = this.getCacheKey(`css_${userId}`);
+    // GET /css - Generate CSS with OKLCH colors (public)
+    this.router.get('/css', async (req: Request, res: Response) => {
+      try {
+        const cacheKey = `${this.getCacheKey()}_css`;
         let css = this.getFromCache(cacheKey);
 
         if (!css) {
-          const dbResult = await this.db.findOne(this.options.tableName, { 
-            where: { userId } 
-          });
-
+          const dbResult = await this.db.findOne(this.options.tableName, {});
           if (!dbResult) {
             return res.status(404).json({ error: 'Theme not found' });
           }
@@ -426,7 +463,15 @@ class ThemeMiddleware {
           css += `  --spacing: 0.25rem;\n`;
           css += `  --tracking-normal: 0em;\n`;
           
+          // Logo variable
+          if (theme.logo) {
+            css += `  --logo-url: url('${theme.logo}');\n`;
+          }
+          
           css += '}\n';
+
+          // Add theme name as comment
+          css += `/* Theme: ${theme.name} */\n`;
 
           this.setCache(cacheKey, css);
         }
@@ -440,28 +485,34 @@ class ThemeMiddleware {
       }
     });
 
-    // DELETE / - Reset theme to defaults
-    this.router.delete('/', async (req: ThemeRequest, res: Response) => {
-      try {
-        const userId = req.user?.id?.toString();
-        if (!userId) {
-          return res.status(401).json({ error: 'Authentication required' });
+    // DELETE / - Reset theme to defaults (admin only)
+    this.router.delete('/', 
+      this.authMiddleware.protect(),
+      async (req: ThemeRequest, res: Response) => {
+        try {
+          // Check if user is admin
+          if (req.user?.role !== 'admin' && !req.user?.isRoot) {
+            return res.status(403).json({ error: 'Admin privileges required' });
+          }
+
+          const defaultTheme = this.createDefaultTheme();
+          await this.db.update(this.options.tableName, defaultTheme, {});
+
+          // Remove logo file if exists
+          const logoPath = path.join(this.options.publicDir, 'logo.png');
+          if (fs.existsSync(logoPath)) {
+            fs.unlinkSync(logoPath);
+          }
+
+          this.clearCache();
+          const updatedTheme = await this.db.findOne(this.options.tableName, {}) as unknown as Theme;
+          res.json({ message: 'Theme reset to defaults', theme: updatedTheme });
+        } catch (error) {
+          console.error('Failed to reset theme:', error);
+          res.status(500).json({ error: 'Failed to reset theme' });
         }
-
-        const defaultTheme = this.createDefaultTheme(userId);
-        const updateResult = await this.db.update(
-          this.options.tableName, 
-          defaultTheme, 
-          { userId }
-        );
-
-        this.clearCache(userId);
-        res.json({ message: 'Theme reset to defaults', theme: updateResult });
-      } catch (error) {
-        console.error('Failed to reset theme:', error);
-        res.status(500).json({ error: 'Failed to reset theme' });
       }
-    });
+    );
   }
 
   middleware() {
