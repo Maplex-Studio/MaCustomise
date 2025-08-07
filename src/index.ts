@@ -62,14 +62,7 @@ export interface ThemeMiddlewareOptions {
   authMiddleware: AuthMiddleware;
   tableName?: string;
   routePrefix?: string;
-  enableCaching?: boolean;
-  cacheTTL?: number;
   publicDir?: string; // Directory to store public files like logos
-}
-
-interface CacheEntry {
-  data: any;
-  timestamp: number;
 }
 
 export interface ThemeRequest extends AuthRequest {
@@ -117,7 +110,6 @@ class ThemeMiddleware {
   private options: Required<Omit<ThemeMiddlewareOptions, 'authMiddleware'>> & { authMiddleware: AuthMiddleware };
   private db: Database;
   private authMiddleware: AuthMiddleware;
-  private cache: Map<string, CacheEntry>;
   private router: Router;
   private initialized: boolean;
 
@@ -131,14 +123,11 @@ class ThemeMiddleware {
       authMiddleware: options.authMiddleware,
       tableName: options.tableName || 'global_theme',
       routePrefix: options.routePrefix || '/api/v1/theme',
-      enableCaching: options.enableCaching !== false,
-      cacheTTL: options.cacheTTL || 300000,
       publicDir: options.publicDir || path.join(process.cwd(), 'public')
     };
     
     this.db = options.database;
     this.authMiddleware = options.authMiddleware;
-    this.cache = new Map<string, CacheEntry>();
     this.router = Router();
     this.initialized = false;
 
@@ -197,32 +186,6 @@ class ThemeMiddleware {
       console.error('❌ Failed to initialize theme database:', error);
       throw error;
     }
-  }
-
-  private getCacheKey(): string { 
-    return `global_theme`; 
-  }
-
-  private getFromCache(key: string): any | null {
-    if (!this.options.enableCaching) return null;
-    const cached = this.cache.get(key);
-    if (!cached) return null;
-    if (Date.now() - cached.timestamp > this.options.cacheTTL) {
-      this.cache.delete(key);
-      return null;
-    }
-    return cached.data;
-  }
-
-  private setCache(key: string, data: any): void {
-    if (!this.options.enableCaching) return;
-    this.cache.set(key, { data, timestamp: Date.now() });
-  }
-
-  private clearCache(): void {
-    if (!this.options.enableCaching) return;
-    this.cache.delete(this.getCacheKey());
-    this.cache.delete(`${this.getCacheKey()}_css`);
   }
 
   private convertToOklch(color: string): string {
@@ -305,16 +268,8 @@ class ThemeMiddleware {
     // GET / - Get global theme (public)
     this.router.get('/', async (req: Request, res: Response) => {
       try {
-        const cacheKey = this.getCacheKey();
-        let theme = this.getFromCache(cacheKey);
-
-        if (!theme) {
-          const dbResult = await this.db.findOne(this.options.tableName, {});
-          theme = dbResult as unknown as Theme;
-          this.setCache(cacheKey, theme);
-        }
-
-        res.json(theme);
+        const dbResult = await this.db.findOne(this.options.tableName, {});
+        res.json(dbResult);
       } catch (error) {
         console.error('Failed to get theme:', error);
         res.status(500).json({ error: 'Failed to retrieve theme' });
@@ -360,7 +315,6 @@ class ThemeMiddleware {
           await this.db.update(this.options.tableName, updateData, {});
           const updatedTheme = await this.db.findOne(this.options.tableName, {}) as unknown as Theme;
 
-          this.clearCache();
           res.json(updatedTheme);
         } catch (error) {
           console.error('Failed to save theme:', error);
@@ -391,7 +345,6 @@ class ThemeMiddleware {
           await this.db.update(this.options.tableName, { logo: logoPath }, {});
           const updatedTheme = await this.db.findOne(this.options.tableName, {}) as unknown as Theme;
 
-          this.clearCache();
           res.json(updatedTheme);
         } catch (error) {
           console.error('Failed to upload logo:', error);
@@ -403,81 +356,73 @@ class ThemeMiddleware {
     // GET /css - Generate CSS with OKLCH colors (public)
     this.router.get('/css', async (req: Request, res: Response) => {
       try {
-        const cacheKey = `${this.getCacheKey()}_css`;
-        let css = this.getFromCache(cacheKey);
-
-        if (!css) {
-          const dbResult = await this.db.findOne(this.options.tableName, {});
-          if (!dbResult) {
-            return res.status(404).json({ error: 'Theme not found' });
-          }
-
-          const theme = dbResult as unknown as Theme;
-
-          css = ':root {\n';
-          
-          // Radius
-          css += `  --radius: ${theme.radius}rem;\n`;
-          
-          // Color variables
-          Object.entries(theme.colors).forEach(([key, value]) => {
-            const oklchColor = this.convertToOklch(value);
-            css += `  --${key}: ${oklchColor};\n`;
-          });
-
-          // Additional color variables
-          css += `  --popover: var(--card);\n`;
-          css += `  --popover-foreground: var(--card-foreground);\n`;
-          css += `  --chart-1: oklch(0.8091 0.1431 152.6021);\n`;
-          css += `  --chart-2: oklch(0.8063 0.1871 155.6935);\n`;
-          css += `  --chart-3: oklch(0.7549 0.1455 165.4268);\n`;
-          css += `  --chart-4: oklch(0.7897 0.1175 177.7279);\n`;
-          css += `  --chart-5: oklch(0.5917 0.1357 242.4819);\n`;
-          css += `  --sidebar: var(--background);\n`;
-          css += `  --sidebar-foreground: var(--foreground);\n`;
-          css += `  --sidebar-primary: var(--primary);\n`;
-          css += `  --sidebar-primary-foreground: var(--primary-foreground);\n`;
-          css += `  --sidebar-accent: var(--accent);\n`;
-          css += `  --sidebar-accent-foreground: var(--accent-foreground);\n`;
-          css += `  --sidebar-border: var(--border);\n`;
-          css += `  --sidebar-ring: var(--ring);\n`;
-          
-          // Font variables
-          css += `  --font-sans: ${theme.fonts.sans}, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';\n`;
-          css += `  --font-serif: ${theme.fonts.serif}, ui-serif, serif;\n`;
-          css += `  --font-mono: ${theme.fonts.mono}, ui-monospace, monospace;\n`;
-          
-          // Shadow variables
-          css += `  --shadow-color: #000000;\n`;
-          css += `  --shadow-opacity: ${theme.shadows.opacity};\n`;
-          css += `  --shadow-blur: ${theme.shadows.blur}px;\n`;
-          css += `  --shadow-spread: 0px;\n`;
-          css += `  --shadow-offset-x: 0;\n`;
-          css += `  --shadow-offset-y: 1px;\n`;
-          
-          // Generated shadow utilities
-          css += this.generateShadowVariables(theme.shadows);
-          
-          // Additional variables
-          css += `  --letter-spacing: 0em;\n`;
-          css += `  --spacing: 0.25rem;\n`;
-          css += `  --tracking-normal: 0em;\n`;
-          
-          // Logo variable
-          if (theme.logo) {
-            css += `  --logo-url: url('${theme.logo}');\n`;
-          }
-          
-          css += '}\n';
-
-          // Add theme name as comment
-          css += `/* Theme: ${theme.name} */\n`;
-
-          this.setCache(cacheKey, css);
+        const dbResult = await this.db.findOne(this.options.tableName, {});
+        if (!dbResult) {
+          return res.status(404).json({ error: 'Theme not found' });
         }
 
+        const theme = dbResult as unknown as Theme;
+
+        let css = ':root {\n';
+        
+        // Radius
+        css += `  --radius: ${theme.radius}rem;\n`;
+        
+        // Color variables
+        Object.entries(theme.colors).forEach(([key, value]) => {
+          const oklchColor = this.convertToOklch(value);
+          css += `  --${key}: ${oklchColor};\n`;
+        });
+
+        // Additional color variables
+        css += `  --popover: var(--card);\n`;
+        css += `  --popover-foreground: var(--card-foreground);\n`;
+        css += `  --chart-1: oklch(0.8091 0.1431 152.6021);\n`;
+        css += `  --chart-2: oklch(0.8063 0.1871 155.6935);\n`;
+        css += `  --chart-3: oklch(0.7549 0.1455 165.4268);\n`;
+        css += `  --chart-4: oklch(0.7897 0.1175 177.7279);\n`;
+        css += `  --chart-5: oklch(0.5917 0.1357 242.4819);\n`;
+        css += `  --sidebar: var(--background);\n`;
+        css += `  --sidebar-foreground: var(--foreground);\n`;
+        css += `  --sidebar-primary: var(--primary);\n`;
+        css += `  --sidebar-primary-foreground: var(--primary-foreground);\n`;
+        css += `  --sidebar-accent: var(--accent);\n`;
+        css += `  --sidebar-accent-foreground: var(--accent-foreground);\n`;
+        css += `  --sidebar-border: var(--border);\n`;
+        css += `  --sidebar-ring: var(--ring);\n`;
+        
+        // Font variables
+        css += `  --font-sans: ${theme.fonts.sans}, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';\n`;
+        css += `  --font-serif: ${theme.fonts.serif}, ui-serif, serif;\n`;
+        css += `  --font-mono: ${theme.fonts.mono}, ui-monospace, monospace;\n`;
+        
+        // Shadow variables
+        css += `  --shadow-color: #000000;\n`;
+        css += `  --shadow-opacity: ${theme.shadows.opacity};\n`;
+        css += `  --shadow-blur: ${theme.shadows.blur}px;\n`;
+        css += `  --shadow-spread: 0px;\n`;
+        css += `  --shadow-offset-x: 0;\n`;
+        css += `  --shadow-offset-y: 1px;\n`;
+        
+        // Generated shadow utilities
+        css += this.generateShadowVariables(theme.shadows);
+        
+        // Additional variables
+        css += `  --letter-spacing: 0em;\n`;
+        css += `  --spacing: 0.25rem;\n`;
+        css += `  --tracking-normal: 0em;\n`;
+        
+        // Logo variable
+        if (theme.logo) {
+          css += `  --logo-url: url('${theme.logo}');\n`;
+        }
+        
+        css += '}\n';
+
+        // Add theme name as comment
+        css += `/* Theme: ${theme.name} */\n`;
+
         res.setHeader('Content-Type', 'text/css');
-        res.setHeader('Cache-Control', 'public, max-age=300');
         res.send(css);
       } catch (error) {
         console.error('Failed to generate CSS:', error);
@@ -504,7 +449,6 @@ class ThemeMiddleware {
             fs.unlinkSync(logoPath);
           }
 
-          this.clearCache();
           const updatedTheme = await this.db.findOne(this.options.tableName, {}) as unknown as Theme;
           res.json({ message: 'Theme reset to defaults', theme: updatedTheme });
         } catch (error) {
